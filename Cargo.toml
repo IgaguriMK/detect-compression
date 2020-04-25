@@ -1,0 +1,19 @@
+[package]
+name = "detect-compression"
+description = "Reader and Writer that auto-detect compresson algorithms."
+version = "0.1.0"
+edition = "2018"
+categories = ["encoding"]
+keywords = ["gzip", "lz4"]
+
+authors = ["Igaguri <igagurimk@gmail.com>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+documentation = "https://docs.rs/detect-compression"
+repository = "https://github.com/IgaguriMK/detect-compression"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+flate2 = "1.0"
+lz4 = "1.23"
