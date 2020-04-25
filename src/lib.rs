@@ -26,18 +26,21 @@ pub struct DetectReader {
 impl DetectReader {
     /// Open compressed or uncompressed file.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<DetectReader> {
-        DetectReader::open_with_wrapper::<P, Id>(path)
+        DetectReader::open_with_wrapper::<P, Id>(path, Id)
     }
 
     /// Open compressed or uncompressed file using wrapper type.
     ///
     /// [`InnerReadWrapper`](trait.InnerReadWrapper.html) is the wrapepr type's trait handles compressed byte stream.
     /// For example, the progress-counting wrapper enables you to calculate progress of loading.
-    pub fn open_with_wrapper<P: AsRef<Path>, W: InnerReadWrapper>(path: P) -> Result<DetectReader> {
+    pub fn open_with_wrapper<P: AsRef<Path>, B: ReadWrapperBuilder>(
+        path: P,
+        builder: B,
+    ) -> Result<DetectReader> {
         let path = path.as_ref();
 
         let f = File::open(path)?;
-        let wf = W::new_wrapped_reader(f);
+        let wf = builder.new_wrapped_reader(f);
 
         let inner: Box<dyn BufRead> = match path.extension() {
             Some(e) if e == "gz" => {
@@ -86,21 +89,22 @@ pub struct DetectWriter {
 impl DetectWriter {
     /// Create compressed or uncompressed file.
     pub fn create<P: AsRef<Path>>(path: P, level: Level) -> Result<DetectWriter> {
-        DetectWriter::create_with_wrapper::<P, Id>(path, level)
+        DetectWriter::create_with_wrapper::<P, Id>(path, level, Id)
     }
 
     /// Create compressed or uncompressed file using wrapper type.
     ///
     /// [`InnerWriteWrapper`](trait.InnerWriteWrapper.html) is the wrapepr type's trait handles compressed byte stream.
     /// For example, the size-accumulating wrapper enables you to calculate size of compressed output.
-    pub fn create_with_wrapper<P: AsRef<Path>, W: InnerWriteWrapper>(
+    pub fn create_with_wrapper<P: AsRef<Path>, B: WriteWrapperBuilder>(
         path: P,
         level: Level,
+        builder: B,
     ) -> Result<DetectWriter> {
         let path = path.as_ref();
 
         let f = File::create(path)?;
-        let wf = W::new_wrapped_writer(f);
+        let wf = builder.new_wrapped_writer(f);
         let w = BufWriter::new(wf);
 
         let inner: Box<dyn Write> = match path.extension() {
@@ -166,48 +170,39 @@ impl Level {
     }
 }
 
-/// The [`Read`](https://doc.rust-lang.org/std/io/trait.Read.html) wrapper type to read from file.
+/// The [`Read`](https://doc.rust-lang.org/std/io/trait.Read.html) wrapper builder.
 ///
 /// For more information, see [`DetectReader::open_with_wrapper()`](struct.DetectReader.html#method.open_with_wrapper).
-pub trait InnerReadWrapper: 'static + Read {
+pub trait ReadWrapperBuilder {
+    /// Read wrapper of `File`
+    type Wrapper: 'static + Read;
     /// Create new wrapper.
-    fn new_wrapped_reader(f: File) -> Self;
+    fn new_wrapped_reader(self, f: File) -> Self::Wrapper;
 }
 
-/// The [`Write`](https://doc.rust-lang.org/std/io/trait.Write.html) wrapper type to write to file.
+/// The [`Write`](https://doc.rust-lang.org/std/io/trait.Write.html) wrapper builder.
 ///
 /// For more information, see [`DetectWriter::create_with_wrapper()`](struct.DetectWriter.html#method.create_with_wrapper).
-pub trait InnerWriteWrapper: 'static + Write {
+pub trait WriteWrapperBuilder {
+    /// Write wrapper of `File`
+    type Wrapper: 'static + Write;
     /// Create new wrapper.
-    fn new_wrapped_writer(f: File) -> Self;
+    fn new_wrapped_writer(self, f: File) -> Self::Wrapper;
 }
 
-struct Id(File);
+#[derive(Debug, Clone, Copy)]
+struct Id;
 
-impl Read for Id {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        self.0.read(buf)
+impl ReadWrapperBuilder for Id {
+    type Wrapper = File;
+    fn new_wrapped_reader(self, f: File) -> Self::Wrapper {
+        f
     }
 }
 
-impl Write for Id {
-    fn write(&mut self, bytes: &[u8]) -> Result<usize> {
-        self.0.write(bytes)
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        self.0.flush()
-    }
-}
-
-impl InnerReadWrapper for Id {
-    fn new_wrapped_reader(f: File) -> Id {
-        Id(f)
-    }
-}
-
-impl InnerWriteWrapper for Id {
-    fn new_wrapped_writer(f: File) -> Id {
-        Id(f)
+impl WriteWrapperBuilder for Id {
+    type Wrapper = File;
+    fn new_wrapped_writer(self, f: File) -> Self::Wrapper {
+        f
     }
 }
