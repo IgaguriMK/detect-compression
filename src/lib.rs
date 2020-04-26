@@ -14,7 +14,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use lz4::liblz4::ContentChecksum;
-use lz4::{Decoder as Lz4Decoder, EncoderBuilder as Lz4EncoderBuilder};
+use lz4::{Decoder as Lz4Decoder, Encoder as Lz4Encoder, EncoderBuilder as Lz4EncoderBuilder};
 
 /// The [`BufRead`](https://doc.rust-lang.org/std/io/trait.BufRead.html) type reads from compressed or uncompressed file.
 ///
@@ -82,8 +82,11 @@ impl BufRead for DetectReader {
 /// The [`Write`](https://doc.rust-lang.org/std/io/trait.Write.html) type writes to compressed or uncompressed file.
 ///
 /// This writer detects compression algorithms from file name extension.
+///
+/// You must [`finalize`](struct.DetectWriter.html#method.finalize) this writer.
 pub struct DetectWriter {
-    inner: Box<dyn Write>,
+    inner: Box<dyn Finalize>,
+    not_closed: bool,
 }
 
 impl DetectWriter {
@@ -107,7 +110,7 @@ impl DetectWriter {
         let wf = builder.new_wrapped_writer(f);
         let w = BufWriter::new(wf);
 
-        let inner: Box<dyn Write> = match path.extension() {
+        let inner: Box<dyn Finalize> = match path.extension() {
             Some(e) if e == "gz" => {
                 let e = GzEncoder::new(w, level.into_flate2_compression());
                 Box::new(e)
@@ -119,12 +122,27 @@ impl DetectWriter {
                     .checksum(ContentChecksum::ChecksumEnabled);
 
                 let e = builder.build(w)?;
-                Box::new(e)
+                Box::new(FinalizeLz4Encoder::new(e))
             }
             _ => Box::new(w),
         };
 
-        Ok(DetectWriter { inner })
+        Ok(DetectWriter {
+            inner,
+            not_closed: true,
+        })
+    }
+
+    /// Finalize this writer.
+    ///
+    /// Some encodings requires finalization.
+    ///
+    pub fn finalize(mut self) -> Result<()> {
+        if self.not_closed {
+            self.inner.finalize()?;
+            self.not_closed = false;
+        }
+        Ok(())
     }
 }
 
@@ -135,6 +153,14 @@ impl Write for DetectWriter {
 
     fn flush(&mut self) -> Result<()> {
         self.inner.flush()
+    }
+}
+
+impl Drop for DetectWriter {
+    fn drop(&mut self) {
+        if self.not_closed {
+            panic!("DetectWriter must be finalized. But dropped before finalization.");
+        }
     }
 }
 
@@ -204,5 +230,44 @@ impl WriteWrapperBuilder for Id {
     type Wrapper = File;
     fn new_wrapped_writer(self, f: File) -> Self::Wrapper {
         f
+    }
+}
+
+trait Finalize: Write {
+    fn finalize(&mut self) -> Result<()> {
+        self.flush()
+    }
+}
+
+impl Finalize for File {}
+impl<W: Write> Finalize for GzEncoder<W> {}
+impl<W: Write> Finalize for BufWriter<W> {}
+
+struct FinalizeLz4Encoder<W: Write>(Option<Lz4Encoder<W>>);
+
+impl<W: Write> FinalizeLz4Encoder<W> {
+    fn new(inner: Lz4Encoder<W>) -> FinalizeLz4Encoder<W> {
+        FinalizeLz4Encoder(Some(inner))
+    }
+}
+
+impl<W: Write> Write for FinalizeLz4Encoder<W> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        self.0
+            .as_mut()
+            .expect("writer already finalized")
+            .write(buf)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.0.as_mut().expect("writer already finalized").flush()
+    }
+}
+
+impl<W: Write> Finalize for FinalizeLz4Encoder<W> {
+    fn finalize(&mut self) -> Result<()> {
+        self.flush()?;
+        let enc = self.0.take().expect("writer already finalized");
+        enc.finish().1
     }
 }
